@@ -111,19 +111,20 @@ def parse_client(item):
         try: return datetime.strptime(raw, "%Y-%m-%d").strftime("%m/%d/%Y")
         except: return raw or ""
 
-    today = datetime.today().strftime("%m/%d/%Y")
     # Remove anything in parentheses at the end e.g. "(Roof Leak)", "(RETARP)"
-    name  = re.sub(r"\s*\(.*?\)\s*$", "", item["name"]).strip()
+    name     = re.sub(r"\s*\(.*?\)\s*$", "", item["name"]).strip()
+    mit_date = fmt(cols.get(COL["mit_date"]) or "")   # Mitigation Date → "Date" fields
+    dol      = fmt(cols.get(COL["dol"]) or "")        # D.O.L. → "Date of Loss" fields
     return {
         "name":           name,
-        "today":          today,
+        "today":          mit_date,
         "address":        addr_line,
         "city":           city,
         "zip":            zip_code,
         "phone":          cols.get(COL["phone"]) or "",
         "email":          cols.get(COL["email"]) or "",
         "insurance":      cols.get(COL["insurance"]) or "",
-        "dol":            fmt(cols.get(COL["dol"]) or ""),
+        "dol":            dol,
         "claim":          cols.get(COL["claim"]) or "",
         "policy":         cols.get(COL["policy"]) or "",
         "city_state_zip": f"{city}, FL {zip_code}".strip(", "),
