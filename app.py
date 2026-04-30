@@ -112,7 +112,8 @@ def parse_client(item):
         except: return raw or ""
 
     today = datetime.today().strftime("%m/%d/%Y")
-    name  = item["name"]
+    # Remove anything in parentheses at the end e.g. "(Roof Leak)", "(RETARP)"
+    name  = re.sub(r"\s*\(.*?\)\s*$", "", item["name"]).strip()
     return {
         "name":           name,
         "today":          today,
