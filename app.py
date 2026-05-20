@@ -16,30 +16,24 @@ from reportlab.pdfgen import canvas as rl_canvas
 
 app = Flask(__name__)
 
-# ─────────────────────────────────────────────────────────────
-#  CONFIGURACIÓN — se leen desde variables de entorno
-# ─────────────────────────────────────────────────────────────
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY", "")
 BOARD_ID       = os.environ.get("BOARD_ID", "18391352531")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")  # opcional
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 FONT_NAME = "Helvetica"
 FONT_SIZE = 9
 
 COL = {
-    "address":  "long_text_mkygb4vx",
-    "phone":    "text_mkyg2nmy",
-    "email":    "email_mkznsja1",
-    "insurance":"text_mkyg3b97",
-    "mit_date": "date_mkygs2tz",
-    "dol":      "date_mkygxc2w",
-    "claim":    "text_mkygka3z",
-    "policy":   "text_mkyge54a",
+    "address":   "long_text_mkygb4vx",
+    "phone":     "text_mkyg2nmy",
+    "email":     "email_mkznsja1",
+    "insurance": "text_mkyg3b97",
+    "mit_date":  "date_mkygs2tz",
+    "dol":       "date_mkygxc2w",
+    "claim":     "text_mkygka3z",
+    "policy":    "text_mkyge54a",
 }
 
-# ─────────────────────────────────────────────────────────────
-#  MONDAY API
-# ─────────────────────────────────────────────────────────────
 HEADERS = {
     "Authorization": MONDAY_API_KEY,
     "Content-Type": "application/json",
@@ -47,7 +41,6 @@ HEADERS = {
 }
 
 def get_item_data(item_id):
-    """Obtiene todos los datos de un item de Monday."""
     query = f"""
     {{
       items(ids: [{item_id}]) {{
@@ -71,7 +64,6 @@ def get_item_data(item_id):
 
 
 def upload_file_to_item(item_id, filename, file_bytes):
-    """Sube el PDF como archivo adjunto al item de Monday."""
     query = """
     mutation ($file: File!) {
       add_file_to_column(
@@ -81,7 +73,6 @@ def upload_file_to_item(item_id, filename, file_bytes):
       ) { id }
     }
     """ % item_id
-
     resp = requests.post(
         "https://api.monday.com/v2/file",
         headers={"Authorization": MONDAY_API_KEY, "API-Version": "2024-01"},
@@ -93,9 +84,6 @@ def upload_file_to_item(item_id, filename, file_bytes):
     return resp.json()
 
 
-# ─────────────────────────────────────────────────────────────
-#  PARSEO DE DATOS
-# ─────────────────────────────────────────────────────────────
 def parse_client(item):
     cols = item["cols"]
     raw_addr = cols.get(COL["address"]) or ""
@@ -111,7 +99,6 @@ def parse_client(item):
         try: return datetime.strptime(raw, "%Y-%m-%d").strftime("%m/%d/%Y")
         except: return raw or ""
 
-    # Remove anything in parentheses at the end e.g. "(Roof Leak)", "(RETARP)"
     name      = re.sub(r"\s*\(.*?\)\s*$", "", item["name"]).strip()
     mit_date  = fmt(cols.get(COL["mit_date"]) or "")
     dol       = fmt(cols.get(COL["dol"]) or "")
@@ -119,28 +106,22 @@ def parse_client(item):
     claim     = cols.get(COL["claim"]) or ""
     policy    = cols.get(COL["policy"]) or ""
 
-    # FIX: city field shows "Miami, FL" instead of just "Miami"
-    city_with_state = f"{city}, FL" if city else ""
-
     return {
         "name":           name,
-        "today":          mit_date,
+        "today":          mit_date,          # → campos "Date"
         "address":        addr_line,
-        "city":           city_with_state,   # → "Miami, FL"
+        "city":           f"{city}, FL" if city else "",   # "Miami, FL"
         "zip":            zip_code,
         "phone":          cols.get(COL["phone"]) or "",
         "email":          cols.get(COL["email"]) or "",
         "insurance":      insurance,
         "dol":            dol,
-        "claim":          claim,             # Claim # → campo Claim#
-        "policy":         policy,            # Policy # → campo Policy#
+        "claim":          claim,             # Claim# → campo Claim#
+        "policy":         policy,            # Policy# → campo Policy#
         "city_state_zip": f"{city}, FL {zip_code}".strip(", "),
     }
 
 
-# ─────────────────────────────────────────────────────────────
-#  GENERACIÓN DEL PDF
-# ─────────────────────────────────────────────────────────────
 def make_overlay(d, page_num, page_w, page_h):
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=(page_w, page_h))
@@ -155,39 +136,60 @@ def make_overlay(d, page_num, page_w, page_h):
                 value = value[:-1]
         c.drawString(x, rl_y, value)
 
+    # ── PÁGINA 1 — Formulario principal ──────────────────────
+    # Page size: 610 x 789
+    # Campos: Client Name | Date
+    #         Address | City | Zip
+    #         Home Phone | Cell Phone | Email
+    #         Insurance Company | Date of Loss
+    #         Policy # | Claim #
     if page_num == 1:
-        text(77,  23, d["name"],           max_w=355)
-        text(449, 23, d["today"],          max_w=128)
-        text(63,  40, d["address"],        max_w=218)
-        text(302, 40, d["city"],           max_w=158)   # ahora "Miami, FL"
-        text(479, 40, d["zip"],            max_w=96)
-        text(79,  57, d["phone"],          max_w=130)
-        text(251, 57, d["phone"],          max_w=138)
-        text(415, 57, d["email"],          max_w=160)
-        text(101, 74, d["insurance"],      max_w=216)   # FIX: insurance antes vacío
-        text(366, 74, d["dol"],            max_w=208)
-        text(62,  91, d["claim"],          max_w=278)   # FIX: claim en Claim#
-        text(349, 91, d["policy"],         max_w=224)   # FIX: policy en Policy#
+        text(77,  23, d["name"],      max_w=355)   # Client Name
+        text(449, 23, d["today"],     max_w=128)   # Date (Mitigation Date)
+        text(63,  40, d["address"],   max_w=218)   # Address
+        text(302, 40, d["city"],      max_w=158)   # City → "Miami, FL"
+        text(479, 40, d["zip"],       max_w=96)    # Zip
+        text(79,  57, d["phone"],     max_w=130)   # Home Phone
+        text(251, 57, d["phone"],     max_w=138)   # Cell Phone
+        text(415, 57, d["email"],     max_w=160)   # Email
+        text(101, 74, d["insurance"], max_w=216)   # Insurance Company
+        text(366, 74, d["dol"],       max_w=208)   # Date of Loss
+        # FIX: Policy# va primero (x=62), Claim# va segundo (x=349)
+        text(62,  91, d["policy"],    max_w=278)   # Policy #
+        text(349, 91, d["claim"],     max_w=224)   # Claim #
 
+    # ── PÁGINA 2 — Lien Law + firmas ─────────────────────────
+    # Page size: 610 x 789
+    # "Client Name" label en top=364.1, "Date" label en top=398.9
+    # El texto va justo después del label → mismo top, x después del label
+    elif page_num == 2:
+        text(88,  364, d["name"],  max_w=200)   # Client Name (izquierda)
+        text(88,  399, d["today"], max_w=200)   # Date (izquierda)
+
+    # ── PÁGINA 3 — Customer Responsibility Form ───────────────
+    # Page size: 612 x 792
+    # "Homeowner Printed Name:" label en top=627.5
+    # "Date:" label en top=640.2
     elif page_num == 3:
-        # FIX: página 3 — client name y date (coordenadas corregidas)
-        text(190, 627, d["name"],          max_w=310)
-        text(84,  640, d["today"],         max_w=200)
+        text(193, 628, d["name"],  max_w=350)   # Homeowner Printed Name
+        text(82,  640, d["today"], max_w=200)   # Date
 
+    # ── PÁGINA 4 — Certificate of Completion ─────────────────
+    # Page size: 612 x 792
+    # Tabla con labels en: Owner(148.9), Phone(148.9), Address(171),
+    # Claim Number(171), City/State/Zip(192.4), DOL(192.4),
+    # Email(214), Insurance Co(214)
+    # "Print Name and Title" en top=612.2 (lado cliente)
     elif page_num == 4:
-        text(106, 148, d["name"],          max_w=170)
-        text(324, 148, d["phone"],         max_w=234)
-        text(90,  171, d["address"],       max_w=186)
-        text(351, 171, d["claim"],         max_w=207)
-        text(118, 192, d["city_state_zip"],max_w=158)
-        text(312, 192, d["dol"],           max_w=246)
-        text(81,  214, d["email"],         max_w=195)
-        text(344, 214, d["insurance"],     max_w=214)   # FIX: insurance en pág 4
-
-    elif page_num == 5:
-        # FIX: última página — insurance y print name (nombre del cliente)
-        text(150, 148, d["insurance"],     max_w=300)   # Insurance
-        text(150, 200, d["name"],          max_w=300)   # Print Name
+        text(106, 149, d["name"],          max_w=170)   # Owner(s)
+        text(324, 149, d["phone"],         max_w=234)   # Phone #
+        text(90,  171, d["address"],       max_w=186)   # Address
+        text(351, 171, d["claim"],         max_w=207)   # Claim Number
+        text(118, 193, d["city_state_zip"],max_w=158)   # City, State, Zip
+        text(312, 193, d["dol"],           max_w=246)   # DOL
+        text(81,  214, d["email"],         max_w=195)   # Email
+        text(344, 214, d["insurance"],     max_w=214)   # Insurance Co
+        text(42,  612, d["name"],          max_w=270)   # Print Name and Title (cliente)
 
     c.save()
     buf.seek(0)
@@ -195,17 +197,17 @@ def make_overlay(d, page_num, page_w, page_h):
 
 
 def generate_pdf_bytes(item):
-    """Genera el PDF en memoria y devuelve los bytes."""
     d = parse_client(item)
-
-    # Leer plantilla PDF desde disco
     template_path = os.path.join(os.path.dirname(__file__), "Mitigation_Contract.pdf")
     reader = PdfReader(template_path)
     writer = PdfWriter()
 
+    # El PDF tiene 4 páginas: índices 0,1,2,3 → page_num 1,2,3,4
+    page_map = {0: 1, 1: 2, 2: 3, 3: 4}
+
     for i, page in enumerate(reader.pages):
-        if i in (0, 2, 3):
-            page_num = {0: 1, 2: 3, 3: 4}[i]
+        if i in page_map:
+            page_num = page_map[i]
             w = float(page.mediabox.width)
             h = float(page.mediabox.height)
             overlay_buf = make_overlay(d, page_num, w, h)
@@ -219,9 +221,6 @@ def generate_pdf_bytes(item):
     return out_buf.read()
 
 
-# ─────────────────────────────────────────────────────────────
-#  ENDPOINTS
-# ─────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "message": "Contract Generator running"}), 200
