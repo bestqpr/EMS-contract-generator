@@ -112,21 +112,28 @@ def parse_client(item):
         except: return raw or ""
 
     # Remove anything in parentheses at the end e.g. "(Roof Leak)", "(RETARP)"
-    name     = re.sub(r"\s*\(.*?\)\s*$", "", item["name"]).strip()
-    mit_date = fmt(cols.get(COL["mit_date"]) or "")   # Mitigation Date → "Date" fields
-    dol      = fmt(cols.get(COL["dol"]) or "")        # D.O.L. → "Date of Loss" fields
+    name      = re.sub(r"\s*\(.*?\)\s*$", "", item["name"]).strip()
+    mit_date  = fmt(cols.get(COL["mit_date"]) or "")
+    dol       = fmt(cols.get(COL["dol"]) or "")
+    insurance = cols.get(COL["insurance"]) or ""
+    claim     = cols.get(COL["claim"]) or ""
+    policy    = cols.get(COL["policy"]) or ""
+
+    # FIX: city field shows "Miami, FL" instead of just "Miami"
+    city_with_state = f"{city}, FL" if city else ""
+
     return {
         "name":           name,
         "today":          mit_date,
         "address":        addr_line,
-        "city":           city,
+        "city":           city_with_state,   # → "Miami, FL"
         "zip":            zip_code,
         "phone":          cols.get(COL["phone"]) or "",
         "email":          cols.get(COL["email"]) or "",
-        "insurance":      cols.get(COL["insurance"]) or "",
+        "insurance":      insurance,
         "dol":            dol,
-        "claim":          cols.get(COL["claim"]) or "",
-        "policy":         cols.get(COL["policy"]) or "",
+        "claim":          claim,             # Claim # → campo Claim#
+        "policy":         policy,            # Policy # → campo Policy#
         "city_state_zip": f"{city}, FL {zip_code}".strip(", "),
     }
 
@@ -150,31 +157,37 @@ def make_overlay(d, page_num, page_w, page_h):
 
     if page_num == 1:
         text(77,  23, d["name"],           max_w=355)
-        text(449, 23, d["today"],           max_w=128)
-        text(63,  40, d["address"],         max_w=218)
-        text(302, 40, d["city"],            max_w=158)
-        text(479, 40, d["zip"],             max_w=96)
-        text(79,  57, d["phone"],           max_w=130)
-        text(251, 57, d["phone"],           max_w=138)
-        text(415, 57, d["email"],           max_w=160)
-        text(101, 74, d["insurance"],       max_w=216)
-        text(366, 74, d["dol"],             max_w=208)
-        text(62,  91, d["claim"],           max_w=278)
-        text(349, 91, d["policy"],          max_w=224)
+        text(449, 23, d["today"],          max_w=128)
+        text(63,  40, d["address"],        max_w=218)
+        text(302, 40, d["city"],           max_w=158)   # ahora "Miami, FL"
+        text(479, 40, d["zip"],            max_w=96)
+        text(79,  57, d["phone"],          max_w=130)
+        text(251, 57, d["phone"],          max_w=138)
+        text(415, 57, d["email"],          max_w=160)
+        text(101, 74, d["insurance"],      max_w=216)   # FIX: insurance antes vacío
+        text(366, 74, d["dol"],            max_w=208)
+        text(62,  91, d["claim"],          max_w=278)   # FIX: claim en Claim#
+        text(349, 91, d["policy"],         max_w=224)   # FIX: policy en Policy#
 
     elif page_num == 3:
-        text(190, 627, d["name"],           max_w=310)
-        text(84,  640, d["today"],          max_w=200)
+        # FIX: página 3 — client name y date (coordenadas corregidas)
+        text(190, 627, d["name"],          max_w=310)
+        text(84,  640, d["today"],         max_w=200)
 
     elif page_num == 4:
-        text(106, 148, d["name"],           max_w=170)
-        text(324, 148, d["phone"],          max_w=234)
-        text(90,  171, d["address"],        max_w=186)
-        text(351, 171, d["claim"],          max_w=207)
-        text(118, 192, d["city_state_zip"], max_w=158)
-        text(312, 192, d["dol"],            max_w=246)
-        text(81,  214, d["email"],          max_w=195)
-        text(344, 214, d["insurance"],      max_w=214)
+        text(106, 148, d["name"],          max_w=170)
+        text(324, 148, d["phone"],         max_w=234)
+        text(90,  171, d["address"],       max_w=186)
+        text(351, 171, d["claim"],         max_w=207)
+        text(118, 192, d["city_state_zip"],max_w=158)
+        text(312, 192, d["dol"],           max_w=246)
+        text(81,  214, d["email"],         max_w=195)
+        text(344, 214, d["insurance"],     max_w=214)   # FIX: insurance en pág 4
+
+    elif page_num == 5:
+        # FIX: última página — insurance y print name (nombre del cliente)
+        text(150, 148, d["insurance"],     max_w=300)   # Insurance
+        text(150, 200, d["name"],          max_w=300)   # Print Name
 
     c.save()
     buf.seek(0)
@@ -216,17 +229,11 @@ def health():
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    """
-    Recibe el webhook de Monday con el item_id,
-    genera el PDF y lo adjunta al item.
-    """
     payload = request.get_json(force=True, silent=True) or {}
 
-    # Monday envía un challenge para verificar el webhook
     if "challenge" in payload:
         return jsonify({"challenge": payload["challenge"]}), 200
 
-    # Obtener item_id del payload
     item_id = None
     try:
         item_id = (
@@ -242,15 +249,12 @@ def generate():
         return jsonify({"error": "No item_id found in payload"}), 400
 
     try:
-        # 1. Obtener datos del cliente desde Monday
         item = get_item_data(item_id)
         name = item["name"]
         print(f"Generating contract for: {name}")
 
-        # 2. Generar PDF
         pdf_bytes = generate_pdf_bytes(item)
 
-        # 3. Subir PDF al item de Monday
         safe_name = re.sub(r'[^a-zA-Z0-9_ ]', '', name)[:50].strip().replace(" ", "_")
         filename  = f"Contract_{safe_name}.pdf"
         upload_file_to_item(item_id, filename, pdf_bytes)
