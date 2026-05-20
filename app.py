@@ -27,7 +27,7 @@ COL = {
     "address":   "long_text_mkygb4vx",
     "phone":     "text_mkyg2nmy",
     "email":     "email_mkznsja1",
-    "insurance": "text_mkyg3b97",
+    "insurance": "board_relation_mm31hbq1",
     "mit_date":  "date_mkygs2tz",
     "dol":       "date_mkygxc2w",
     "claim":     "text_mkygka3z",
@@ -46,7 +46,14 @@ def get_item_data(item_id):
       items(ids: [{item_id}]) {{
         id
         name
-        column_values {{ id text value }}
+        column_values {{
+          id
+          text
+          value
+          ... on BoardRelationValue {{
+            linked_items {{ name }}
+          }}
+        }}
       }}
     }}
     """
@@ -59,14 +66,20 @@ def get_item_data(item_id):
     resp.raise_for_status()
     data = resp.json()
     item = data["data"]["items"][0]
-    # Guardamos text Y value para columnas que puedan devolverlo diferente
     cols_text  = {cv["id"]: cv["text"]  for cv in item["column_values"]}
     cols_value = {cv["id"]: cv["value"] for cv in item["column_values"]}
+    # Para columnas board_relation, extraer el nombre del item vinculado
+    cols_linked = {}
+    for cv in item["column_values"]:
+        linked = cv.get("linked_items")
+        if linked:
+            cols_linked[cv["id"]] = linked[0]["name"] if linked else ""
     return {
-        "id":         item["id"],
-        "name":       item["name"],
-        "cols":       cols_text,
-        "cols_value": cols_value,
+        "id":          item["id"],
+        "name":        item["name"],
+        "cols":        cols_text,
+        "cols_value":  cols_value,
+        "cols_linked": cols_linked,
     }
 
 
@@ -118,16 +131,12 @@ def parse_client(item):
     mit_date  = fmt(cols.get(COL["mit_date"]) or "")
     dol       = fmt(cols.get(COL["dol"]) or "")
 
-    # Insurance: intentar leer directo y también del value JSON por si acaso
-    insurance = cols.get(COL["insurance"]) or ""
-    if not insurance:
-        raw_val = item["cols_value"].get(COL["insurance"]) or ""
-        if raw_val and raw_val != "null":
-            import json as _json
-            try:
-                insurance = _json.loads(raw_val).get("text", "") or ""
-            except Exception:
-                insurance = raw_val
+    # Insurance: viene de columna board_relation → leer linked_items
+    insurance = (
+        item.get("cols_linked", {}).get(COL["insurance"]) or
+        cols.get(COL["insurance"]) or
+        ""
+    )
 
     claim  = cols.get(COL["claim"])  or ""
     policy = cols.get(COL["policy"]) or ""
@@ -205,8 +214,8 @@ def make_overlay(d, page_num, page_w, page_h):
     # "Homeowner Printed Name:" top=627.5, x=54..186
     # "Date:" top=640.2, x=54..80
     elif page_num == 3:
-        text(193, 618, d["name"],  max_w=350)   # después del label Homeowner Printed Name
-        text(82,  631, d["today"], max_w=200)   # después del label Date
+        text(190, 627, d["name"],  max_w=350)   # después del label Homeowner Printed Name
+        text(83,  640, d["today"], max_w=200)   # después del label Date
 
     # ── PÁGINA 4 ─────────────────────────────────────────────
     # Tabla: Owner(148.9) | Phone(148.9) | Address(171) | Claim(171)
@@ -299,6 +308,14 @@ def generate():
         print(f"❌ Error: {e}")
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/debug/<item_id>", methods=["GET"])
+def debug_item(item_id):
+    try:
+        item = get_item_data(item_id)
+        return jsonify({"name": item["name"], "cols": item["cols"]}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
